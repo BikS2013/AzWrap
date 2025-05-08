@@ -40,9 +40,7 @@ from io import BytesIO
 openai_client = ai_service.get_OpenAIClient(api_version='2024-05-01-preview')
 
 # Load a .docx file from container (instance of class Container)
-blob = container.get_blob_content(file_path)
-byte_stream = BytesIO(blob)
-doc_instance = Document(byte_stream)
+doc_instance = container.get_blob_content(file_path)
 
 # Define a JSON format template
 json_format = {
