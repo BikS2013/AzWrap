@@ -21,6 +21,12 @@ from azure.mgmt.search import SearchManagementClient
 import azure.mgmt.search.models as azsrm
 import azure.search.documents as azsd
 from azure.search.documents.models import VectorizedQuery, VectorizableTextQuery, QueryType
+from azure.search.documents.indexes.models import (
+    SearchIndexer,
+    IndexingParameters,
+    FieldMapping,
+    OutputFieldMappingEntry
+)
 from tenacity import retry, stop_after_attempt, wait_random_exponential
 class Identity:
     """Azure Identity for authentication.
@@ -1425,8 +1431,10 @@ class SearchIndexerManager:
             return None
             
     def create_indexer(self, name: str, data_source_name: str,
-                      target_index_name: str,
+                      target_index_name: str, skillset_name: Optional[str] = None,
                       schedule: Optional[azsdim.IndexingSchedule] = None,
+                      field_mappings: Optional[List[azsdim.FieldMapping]] = None,
+                      output_field_mappings: Optional[List[azsdim.OutputFieldMappingEntry]] = None,
                       parameters: Optional[azsdim.IndexingParameters] = None) -> "Indexer":
         """
         Create a new indexer.
@@ -1445,8 +1453,11 @@ class SearchIndexerManager:
             name=name,
             data_source_name=data_source_name,
             target_index_name=target_index_name,
+            skillset_name=skillset_name,
             schedule=schedule,
-            parameters=parameters
+            parameters=parameters,
+            field_mappings=field_mappings,
+            output_field_mappings=output_field_mappings
         )
         result = self.indexer_client.create_indexer(indexer)
         return Indexer(self, result)
@@ -2064,84 +2075,105 @@ class SearchIndex:
         Returns:
             list: Search results enriched with context windows
         """
-        # Get initial search results
-        results = self.perform_hybrid_search(query_text=query_text, 
-                                        query_vector=query_vector, 
-                                        vector_fields=vector_fields, 
-                                        use_semantic_search=use_semantic_search,
-                                        top=top,
-                                        semantic_config_name=semantic_config_name)
-        
+        results = []
+        try:
+            # Get initial search results
+            results = self.perform_hybrid_search(query_text=query_text, 
+                                            query_vector=query_vector, 
+                                            vector_fields=vector_fields, 
+                                            use_semantic_search=use_semantic_search,
+                                            top=top,
+                                            semantic_config_name=semantic_config_name,
+                                            search_options=search_options)
+        except Exception as e:
+            try:
+                # Get initial search results without search options
+                results = self.perform_hybrid_search(query_text=query_text, 
+                                                query_vector=query_vector, 
+                                                vector_fields=vector_fields, 
+                                                use_semantic_search=use_semantic_search,
+                                                top=top,
+                                                semantic_config_name=semantic_config_name)
+            except Exception as e:
+                print(f"Error performing hybrid search: {e}")
+                return []
+            
+        # Check if results are empty
         if not results:
             return []
         
-        # Collect all parent_ids from the results
-        parent_ids = set()
-        for result in results:
-            if 'parent_id' in result:
-                parent_ids.add(result['parent_id'])
-        
-        # Batch retrieve all chunks for all parent documents
-        if parent_ids:
-            # Create a filter to get all chunks from all parent documents in one query
-            parent_filter = " or ".join([f"parent_id eq '{pid}'" for pid in parent_ids])
+        # If window size is specified, retrieve context chunks
+        if window_size > 0:
+            # Collect all parent_ids from the results
+            parent_ids = set()
+            for result in results:
+                if 'parent_id' in result:
+                    parent_ids.add(result['parent_id'])
             
-            # Retrieve all chunks (up to a reasonable limit)
-            search_options: Dict[str, Any] = {
-                "include_total_count": True,
-                "select": "*"
-            }
-            all_chunks = list(self.perform_search("*", 
-                                                  filter_expression=parent_filter,
-                                                  top=1000,  # Adjust based on your needs
-                                                  search_options=search_options))
-            
-            # Group chunks by parent_id
-            all_chunks_by_parent, chunk_position_map = self.get_adjacent_chunks(all_chunks)
-        
-        # Enrich results with context windows
-        enriched_results = []
-        for result in results:
-            parent_id = result.get('parent_id')
-            chunk_id = result.get('chunk_id')
-            
-            # Initialize empty context window
-            context_window: Dict[str, List[Dict[str, Any]]] = {
-                'before': [],
-                'after': []
-            }
-            
-            if parent_id and chunk_id and parent_id in all_chunks_by_parent:
-                parent_chunks = all_chunks_by_parent[parent_id]
+            # Batch retrieve all chunks for all parent documents
+            if parent_ids:
+                # Create a filter to get all chunks from all parent documents in one query
+                parent_filter = " or ".join([f"parent_id eq '{pid}'" for pid in parent_ids])
                 
-                # Find the position of this chunk
-                position = chunk_position_map.get((parent_id, chunk_id))
+                # Retrieve all chunks (up to a reasonable limit)
+                search_options: Dict[str, Any] = {
+                    "include_total_count": True,
+                    "select": "*"
+                }
+                all_chunks = list(self.perform_search("*", 
+                                                    filter_expression=parent_filter,
+                                                    top=1000,  # Adjust based on your needs
+                                                    search_options=search_options))
                 
-                if position is not None:
-                    # Get previous chunks (up to window_size)
-                    start_idx = max(0, position - window_size)
-                    context_window['before'] = parent_chunks[start_idx:position]
+                # Group chunks by parent_id
+                all_chunks_by_parent, chunk_position_map = self.get_adjacent_chunks(all_chunks)
+            
+            # Enrich results with context windows
+            enriched_results = []
+            for result in results:
+                parent_id = result.get('parent_id')
+                chunk_id = result.get('chunk_id')
+                
+                # Initialize empty context window
+                context_window: Dict[str, List[Dict[str, Any]]] = {
+                    'before': [],
+                    'after': []
+                }
+                
+                if parent_id and chunk_id and parent_id in all_chunks_by_parent:
+                    parent_chunks = all_chunks_by_parent[parent_id]
                     
-                    # Get next chunks (up to window_size)
-                    end_idx = min(len(parent_chunks), position + window_size + 1)
-                    context_window['after'] = parent_chunks[position+1:end_idx]
+                    # Find the position of this chunk
+                    position = chunk_position_map.get((parent_id, chunk_id))
+                    
+                    if position is not None:
+                        # Get previous chunks (up to window_size)
+                        start_idx = max(0, position - window_size)
+                        context_window['before'] = parent_chunks[start_idx:position]
+                        
+                        # Get next chunks (up to window_size)
+                        end_idx = min(len(parent_chunks), position + window_size + 1)
+                        context_window['after'] = parent_chunks[position+1:end_idx]
+                
+                enriched_result = {
+                    'result': result,
+                    'context_window': context_window
+                }
+                
+                enriched_results.append(enriched_result)
             
-            enriched_result = {
-                'result': result,
-                'context_window': context_window
-            }
-            
-            enriched_results.append(enriched_result)
-        
-        results_return = []
-        for result in enriched_results:
-            results_return.append(result['result'])
-            for chunk in result['context_window']['before']:
-                results_return.append(chunk)
-            for chunk in result['context_window']['after']:
-                results_return.append(chunk)
+            results_return = []
+            for result in enriched_results:
+                results_return.append(result['result'])
+                for chunk in result['context_window']['before']:
+                    results_return.append(chunk)
+                for chunk in result['context_window']['after']:
+                    results_return.append(chunk)
 
-        return results_return
+            return results_return
+        else:
+            # If no window size is specified, return the original results
+            return results
 
     def perform_hybrid_search(self,
                               query_text: str,
