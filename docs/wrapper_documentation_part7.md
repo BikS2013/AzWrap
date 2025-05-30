@@ -15,28 +15,22 @@ The `DocParsing` class is designed to handle the parsing of content from ".docx"
 - Supports metadata extraction and section-based content organization.
 
 **Attributes**:
-- `doc_instance`: python-docx Document object
 - `openai_client`: OpenAIClient instance
 - `json_format`: Format of JSON to be produced from document
 - `domain`: Document domain
-- `sub_domain`: Container folder
 - `model_name`: LLM name
-- `doc_name`: Document name
 
 **Key Methods**:
-- `doc_to_json()`: Converts the original document into a list of dictionaries (JSON string), utilizing all functions of the class. Fields of the dictionary include multiple metadata for the document.
+- `doc_to_json()`: Converts an original document, in python-docx "Document" format, into a list of dictionaries (JSON string), utilizing all functions of the class. Fields of the dictionary include multiple metadata for the document.
 - `extract_data()`: Extracts content from the document, handling single or multi-process structures.
 - `_is_single_process()`: Determines whether the document contains a single process or multiple processes based on headers.
 - `_iterate_block_items_with_section()`: Function to iterate through the document's blocks.
 - `_extract_header_info()`: Extracts the process title from a section header.
-- `update_json_with_ai(content_to_parse: str, process_identifier: str)`
+- `update_json_with_ai(content_to_parse: str, process_identifier: str, doc_name: str)`:
 Utilizes an LLM call to parse document content into a structured JSON format. Returns the JSON string or `None` on failure.
 
 **Usage Example**:
 ```python
-from docx import Document
-from io import BytesIO
-
 openai_client = ai_service.get_OpenAIClient(api_version='2024-05-01-preview')
 
 # Load a .docx file from container (instance of class Container)
@@ -66,23 +60,20 @@ json_format = {
 
 # Initialize the DocParsing class
 doc_parser = DocParsing(
-    doc_instance=doc_instance,
     openai_client=openai_client,
     json_format=json_format,
     domain="Finance",
-    sub_domain=container_folder,
     model_name="gpt-4o-mini",
-    doc_name=container_file_name
 )
 
 # Extract document data and convert to JSON
-parsed_data = doc_parser.doc_to_json()
+parsed_data = doc_parser.doc_to_json(doc_instance, file_path, container_folder)
 print(parsed_data)
 ```
 
 ### MultiProcessHandler
 
-The `MultiProcessHandler` class is designed to facilitate the processing of multiple documents and their upload to Azure Search Indexes. Supports both core and detailed indexing.
+The `MultiProcessHandler` class is designed to facilitate the processing of multiple documents and their upload to Azure Search Indexes. Supports both process and step indexing.
 
 **Attributes**:
 - dict_list: JSON extracted from document `doc_to_json()` function of `DocParsing` class
@@ -104,7 +95,7 @@ The `MultiProcessHandler` class is designed to facilitate the processing of mult
 **Usage Example**:
 ```python
 # Utilizing instance of DocParsing class
-parsed_data = doc_parser.doc_to_json()
+parsed_data = doc_parser.doc_to_json(doc_instance, file_path, container_folder)
 
 # Initialize the MultiProcessHandler
 handler = MultiProcessHandler(
