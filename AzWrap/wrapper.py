@@ -299,6 +299,9 @@ class StorageAccount:
         container_client = client.get_container_client(container_name)
         return container_client
 
+    def get_tables_client(self) -> "Table": 
+        return Table(self)
+
     def get_containers(self) -> List[ContainerProperties]:
         client = self.get_blob_service_client()
         containers = client.list_containers()
@@ -1346,8 +1349,6 @@ from io import BytesIO
 from openai import AzureOpenAI
 from langchain_openai import AzureChatOpenAI
 
-# Document Intelligence imports
-from azure.ai.formrecognizer import DocumentAnalysisClient
 class AIService:
     cognitive_client: CognitiveServicesManagementClient
     azure_account: azcsm.Account
@@ -1585,6 +1586,13 @@ class AIService:
             print(f"Error updating deployment '{deployment_name}': {str(e)}")
             return {"error": str(e)}
 
+
+# Form Recognizer imports
+from azure.ai.formrecognizer import DocumentAnalysisClient, DocumentModelAdministrationClient
+# Document Intelligence imports
+from azure.ai.documentintelligence import DocumentIntelligenceClient , DocumentIntelligenceAdministrationClient
+from azure.ai.documentintelligence.models import BuildDocumentModelRequest, AzureBlobContentSource, AnalyzeDocumentRequest, AuthorizeCopyRequest
+
 class DocumentIntelligenceService:
     """Azure Document Intelligence service.
     
@@ -1690,7 +1698,7 @@ class DocumentIntelligenceService:
             self._credential = AzureKeyCredential(keys.key1)
         return self._credential
     
-    def get_document_analysis_client(self) -> "DocumentIntelligenceClientWrapper":
+    def get_document_analysis_client(self) -> "DocumentAnalysisClientWrapper":
         """Get a Document Analysis client for analyzing documents.
         
         Returns:
@@ -1701,13 +1709,54 @@ class DocumentIntelligenceService:
             credential=self.get_credential()
         )
         
-        return DocumentIntelligenceClientWrapper(self, client)
-
-
-class DocumentIntelligenceClientWrapper:
-    """Wrapper for Azure Document Intelligence client.
+        return DocumentAnalysisClientWrapper(self, client)
     
-    Provides methods for analyzing documents using various models.
+    def get_document_intelligence_client(self) -> "DocumentIntelligenceClientWrapper":
+        """Get a Document Analysis client for analyzing documents.
+        
+        Returns:
+            DocumentIntelligenceClientWrapper object for analyzing documents
+        """
+        client = DocumentIntelligenceClient(
+            endpoint=self.endpoint,
+            credential=self.get_credential()
+        )
+        
+        return DocumentIntelligenceClientWrapper(self, client) 
+    
+    def get_formrecognizer_models_client(self) -> "FormRecognizerModels":
+        """Get a Document Analysis client for analyzing documents.
+        
+        Returns:
+            DocumentIntelligenceClientWrapper object for analyzing documents
+        """
+
+        client = DocumentModelAdministrationClient( 
+            endpoint=self.endpoint,
+            credential=self.get_credential()
+        )
+        
+        return FormRecognizerModels(self, client)
+    
+    def get_document_intelligence_models_client(self) -> "DocumentIntelligenceModels":
+        """Get a Document Analysis client for analyzing documents.
+        
+        Returns:
+            DocumentIntelligenceClientWrapper object for analyzing documents
+        """
+
+        client = DocumentIntelligenceAdministrationClient( 
+            endpoint=self.endpoint,
+            credential=self.get_credential()
+        )
+        
+        return DocumentIntelligenceModels(self, client)
+
+
+class DocumentAnalysisClientWrapper:
+    """Wrapper for Azure Document Analysis client.
+    
+    Provides methods for analyzing documents using various models with form recognizer.
     """
     document_intelligence_service: DocumentIntelligenceService
     client: DocumentAnalysisClient
@@ -1984,8 +2033,15 @@ class DocumentIntelligenceClientWrapper:
         Returns:
             Dictionary containing the custom document analysis results
         """
-        return self.analyze_document(custom_model_id, document_path, **kwargs)
-    
+        try:
+            with open(document_path, "rb") as f:
+                poller = self.client.begin_analyze_document(custom_model_id, document=f, **kwargs)
+                result = poller.result()
+                return result.to_dict()
+        except Exception as e:
+            print(f"Error analyzing document: {str(e)}")
+            raise e
+
     @retry(wait=wait_random_exponential(min=1, max=20), stop=stop_after_attempt(6))
     def analyze_custom_document_from_url(self, custom_model_id: str, document_url: str, **kwargs) -> Dict[str, Any]:
         """Analyze a document from URL using a custom trained model.
@@ -1998,7 +2054,17 @@ class DocumentIntelligenceClientWrapper:
         Returns:
             Dictionary containing the custom document analysis results
         """
-        return self.analyze_document_from_url(custom_model_id, document_url, **kwargs)
+        try:
+            poller = self.client.begin_analyze_document_from_url(
+                custom_model_id,
+                document_url,
+                **kwargs
+            )
+            result = poller.result()
+            return result.to_dict()
+        except Exception as e:
+            print(f"Error analyzing document from URL: {str(e)}")
+            raise e
     
     def analyze_batch_documents(self, model_id: str, document_paths: List[str], **kwargs) -> List[Dict[str, Any]]:
         """Analyze multiple documents in batch using the specified model.
@@ -2039,6 +2105,410 @@ class DocumentIntelligenceClientWrapper:
             except Exception as e:
                 results.append({"document_url": url, "status": "error", "error": str(e)})
         return results
+
+    def analyze_batch_custom_documents(self, custom_model_id: str, document_paths: List[str], **kwargs) -> List[Dict[str, Any]]:
+        """Analyze multiple documents in batch using the specified model.
+        
+        Args:
+            model_id: The model ID to use for all documents
+            document_paths: List of paths to document files to analyze
+            **kwargs: Additional parameters to pass to the analyze_document method
+            
+        Returns:
+            List of dictionaries containing analysis results for each document
+        """
+        results = []
+        for path in document_paths:
+            try:
+                result = self.analyze_custom_document(custom_model_id, path, **kwargs)
+                results.append({"document_path": path, "status": "success", "result": result})
+            except Exception as e:
+                results.append({"document_path": path, "status": "error", "error": str(e)})
+        return results
+    
+    def analyze_batch_custom_documents_from_urls(self, custom_model_id: str, document_urls: List[str], **kwargs) -> List[Dict[str, Any]]:
+        """Analyze multiple documents from URLs in batch using the specified model.
+        
+        Args:
+            model_id: The model ID to use for all documents
+            document_urls: List of URLs of documents to analyze
+            **kwargs: Additional parameters to pass to the analyze_document method
+            
+        Returns:
+            List of dictionaries containing analysis results for each document
+        """
+        results = []
+        for url in document_urls:
+            try:
+                result = self.analyze_custom_document_from_url(custom_model_id, url, **kwargs)
+                results.append({"document_url": url, "status": "success", "result": result})
+            except Exception as e:
+                results.append({"document_url": url, "status": "error", "error": str(e)})
+        return results    
+
+    def _serialize_result(self, result) -> Dict[str, Any]:
+        """Convert the document analysis result to a serializable dictionary.
+        
+        Args:
+            result: The analysis result to convert
+            
+        Returns:
+            Dictionary representation of the analysis result
+        """
+        # This is a simplified serialization - you may need to expand this based on result type
+        serialized = {
+            "content": result.content,
+            "pages": []
+        }
+        
+        # Add page information
+        if hasattr(result, "pages"):
+            for page in result.pages:
+                page_dict = {
+                    "page_number": page.page_number,
+                    "lines": [],
+                    "tables": []
+                }
+                
+                # Add text lines
+                if hasattr(page, "lines"):
+                    for line in page.lines:
+                        page_dict["lines"].append({
+                            "content": line.content,
+                            "bounding_box": line.polygon if hasattr(line, "polygon") else None
+                        })
+                
+                # Add tables
+                if hasattr(result, "tables"):
+                    for table in result.tables:
+                        if table.bounding_regions and table.bounding_regions[0].page_number == page.page_number:
+                            table_dict = {
+                                "row_count": table.row_count,
+                                "column_count": table.column_count,
+                                "cells": []
+                            }
+                            
+                            # Add table cells
+                            for cell in table.cells:
+                                table_dict["cells"].append({
+                                    "row_index": cell.row_index,
+                                    "column_index": cell.column_index,
+                                    "content": cell.content,
+                                    "kind": cell.kind
+                                })
+                            
+                            page_dict["tables"].append(table_dict)
+                
+                serialized["pages"].append(page_dict)
+        
+        # Add document type specific information
+        if hasattr(result, "key_value_pairs") and result.key_value_pairs:
+            serialized["key_value_pairs"] = []
+            for kv in result.key_value_pairs:
+                if kv.key and kv.value:
+                    serialized["key_value_pairs"].append({
+                        "key": kv.key.content,
+                        "value": kv.value.content
+                    })
+        
+        return serialized
+
+
+class FormRecognizerModels:
+    """Model class for Azure Form Recognizer client.
+    
+    Provides methods for creating, training and deleting custom extraction models.
+    """
+    document_intelligence_service: DocumentIntelligenceService
+    client: DocumentModelAdministrationClient
+    
+    def __init__(self, document_intelligence_service: DocumentIntelligenceService, client: DocumentModelAdministrationClient):
+        self.document_intelligence_service = document_intelligence_service
+        self.client = client
+
+    def get_document_models(self) -> list:
+        """
+        List all custom document model IDs in the Azure Document Intelligence resource.
+
+        Returns:
+            list: A list of custom model IDs.
+        """
+        # Find the custom model ids
+        custom_model_ids = [custom_model.model_id for custom_model in self.client.list_document_models()]
+        return custom_model_ids
+    
+    def get_document_model_details(self, model_id) -> dict:
+        """
+        Retrieve details of a specific document model by its ID.
+
+        Args:
+            model_id (str): The unique identifier of the document model.
+
+        Returns:
+            dict: A dictionary containing details about the specified model.
+        """
+        # Get the model details
+        model_details = self.client.get_document_model(model_id=model_id)
+        return model_details.to_dict()
+    
+    def delete_model(self, model_id) -> str:
+        """
+        Delete a custom document model from the Azure Form Recognizer resource.
+
+        Args:
+            model_id (str): The ID of the model to delete.
+
+        Returns:
+            str: Confirmation message after deletion.
+        """
+        # Delete an extraction document model based on model_id
+        self.client.delete_document_model(model_id=model_id)
+        return f"Succesfully deleted the custom model {model_id}."
+    
+    def create_document_model(self, model_id: str, build_mode: str, blob_container_url: str, folder_path: str = None, description: str = None) -> dict:
+        """
+        Create and train a new custom document model using labeled or unlabeled training data.
+
+        Args:
+            model_id (str): Unique ID to assign to the custom model.
+            build_mode (str): Training mode, such as 'template' or 'neural'.
+            blob_container_url (str): URL to the Azure Blob Storage container containing the training data (pdf, pdf.labels.json, pdf.ocr.json per document).
+            folder_path (str, optional): Subfolder path in the container with the training data. Defaults to None.
+            description (str, optional): Optional description for the model. Defaults to None.
+
+        Returns:
+            dict: Dictionary containing details about the newly created model.
+        """
+        # Verify folder path format
+        if folder_path and not folder_path.startswith('/'):
+            folder_path = "/" + folder_path
+        # Create and train a custom model 
+        poller = self.client.begin_build_document_model(
+            blob_container_url= blob_container_url,
+            prefix= folder_path,
+            build_mode= build_mode,
+            model_id=model_id,
+            description=description
+            )
+        return poller.result().to_dict()
+
+    def copy_document_model(self, model_id: str, target_endpoint: str, target_key: str) -> dict:
+        """
+        Copy a document model from the current Azure Document Intelligence resource to a target resource.
+        
+        Args:
+            model_id (str): The ID of the model to be copied.
+            target_endpoint (str): The endpoint URL of the target Azure Form Recognizer resource.
+            target_key (str): The API key for the target resource to authenticate the copy operation.
+
+        Returns:
+            dict: A dictionary containing the details of the newly created model in the target resource.
+        """
+        # Initialize default model description to be copied
+        model_description = f"The model {model_id} has been copied from the resource {self.document_intelligence_service.get_name()}."
+        # Get description for model to copy to target source
+        model_details = self.get_document_model_details(model_id)
+        if "description" in model_details.keys():
+            model_description = model_details["description"]
+
+        # Create the documemt admin for target subscription
+        target_client = DocumentModelAdministrationClient(
+            endpoint=target_endpoint, credential=AzureKeyCredential(target_key)
+        )
+        # Get authorization to copy model to target client
+        target = target_client.get_copy_authorization(
+            model_id= model_id,
+            description= model_description
+        )
+        # Perform the copy of the file
+        poller = self.client.begin_copy_document_model_to(
+            model_id=model_id,
+            target=target,
+        )
+        return poller.result().to_dict()
+
+
+class DocumentIntelligenceClientWrapper:
+    """Wrapper for Azure Document Intelligence client.
+    
+    Provides methods for analyzing documents using various models.
+    """
+    document_intelligence_service: DocumentIntelligenceService
+    client: DocumentIntelligenceClient
+    
+    def __init__(self, document_intelligence_service: DocumentIntelligenceService, client: DocumentIntelligenceClient):
+        self.document_intelligence_service = document_intelligence_service
+        self.client = client
+
+    @retry(wait=wait_random_exponential(min=1, max=20), stop=stop_after_attempt(6))
+    def analyze_document(self, model_id: str, document_path: str, **kwargs) -> Dict[str, Any]:
+        """Analyze a document using a specified model.
+        
+        Args:
+            model_id: The model ID to use (e.g., "prebuilt-layout", "prebuilt-receipt", etc.)
+            document_path: Path to the document file to analyze
+            **kwargs: Additional parameters to pass to the analyze_document method
+            
+        Returns:
+            Dictionary containing the analysis results
+        """
+        try:
+            with open(document_path, "rb") as f:
+                poller = self.client.begin_analyze_document(model_id, body=f, **kwargs) 
+                result = poller.result()
+                return self._serialize_result(result)
+        except Exception as e:
+            print(f"Error analyzing document: {str(e)}")
+            raise e
+
+    @retry(wait=wait_random_exponential(min=1, max=20), stop=stop_after_attempt(6))
+    def analyze_document_from_url(self, model_id: str, document_url: str, **kwargs) -> Dict[str, Any]:
+        """Analyze a document from a URL using a specified model.
+        
+        Args:
+            model_id: The model ID to use (e.g., "prebuilt-layout", "prebuilt-receipt", etc.)
+            document_url: URL of the document to analyze
+            **kwargs: Additional parameters to pass to the analyze_document method
+            
+        Returns:
+            Dictionary containing the analysis results
+        """
+        try:
+            poller = self.client.begin_analyze_document(
+                model_id,
+                body= AnalyzeDocumentRequest(url_source=document_url),
+                **kwargs
+            )
+            result = poller.result()
+            return self._serialize_result(result)
+        except Exception as e:
+            print(f"Error analyzing document from URL: {str(e)}")
+            raise e
+
+    @retry(wait=wait_random_exponential(min=1, max=20), stop=stop_after_attempt(6))
+    def analyze_custom_document(self, custom_model_id: str, document_path: str, **kwargs) -> Dict[str, Any]:
+        """Analyze a document using a custom trained model.
+        
+        Args:
+            custom_model_id: The ID of the custom model to use
+            document_path: Path to the document file to analyze
+            **kwargs: Additional parameters to pass to the analyze_document method
+            
+        Returns:
+            Dictionary containing the custom document analysis results
+        """
+        try:
+            with open(document_path, "rb") as f:
+                poller = self.client.begin_analyze_document(custom_model_id, body=f, **kwargs)
+                result = poller.result()
+                return result.as_dict()
+        except Exception as e:
+            print(f"Error analyzing document: {str(e)}")
+            raise e
+
+    @retry(wait=wait_random_exponential(min=1, max=20), stop=stop_after_attempt(6))
+    def analyze_custom_document_from_url(self, custom_model_id: str, document_url: str, **kwargs) -> Dict[str, Any]:
+        """Analyze a document from URL using a custom trained model.
+        
+        Args:
+            custom_model_id: The ID of the custom model to use
+            document_url: URL of the document to analyze
+            **kwargs: Additional parameters to pass to the analyze_document method
+            
+        Returns:
+            Dictionary containing the custom document analysis results
+        """
+        try:
+            poller = self.client.begin_analyze_document(
+                custom_model_id,
+                body = AnalyzeDocumentRequest(url_source=document_url),
+                **kwargs
+            )
+            result = poller.result()
+            return result.as_dict()
+        except Exception as e:
+            print(f"Error analyzing document from URL: {str(e)}")
+            raise e
+        
+    def analyze_batch_documents(self, model_id: str, document_paths: List[str], **kwargs) -> List[Dict[str, Any]]:
+        """Analyze multiple documents in batch using the specified model.
+        
+        Args:
+            model_id: The model ID to use for all documents
+            document_paths: List of paths to document files to analyze
+            **kwargs: Additional parameters to pass to the analyze_document method
+            
+        Returns:
+            List of dictionaries containing analysis results for each document
+        """
+        results = []
+        for path in document_paths:
+            try:
+                result = self.analyze_document(model_id, path, **kwargs)
+                results.append({"document_path": path, "status": "success", "result": result})
+            except Exception as e:
+                results.append({"document_path": path, "status": "error", "error": str(e)})
+        return results
+    
+    def analyze_batch_documents_from_urls(self, model_id: str, document_urls: List[str], **kwargs) -> List[Dict[str, Any]]:
+        """Analyze multiple documents from URLs in batch using the specified model.
+        
+        Args:
+            model_id: The model ID to use for all documents
+            document_urls: List of URLs of documents to analyze
+            **kwargs: Additional parameters to pass to the analyze_document method
+            
+        Returns:
+            List of dictionaries containing analysis results for each document
+        """
+        results = []
+        for url in document_urls:
+            try:
+                result = self.analyze_document_from_url(model_id, url, **kwargs)
+                results.append({"document_url": url, "status": "success", "result": result})
+            except Exception as e:
+                results.append({"document_url": url, "status": "error", "error": str(e)})
+        return results      
+    
+    def analyze_batch_custom_documents(self, custom_model_id: str, document_paths: List[str], **kwargs) -> List[Dict[str, Any]]:
+        """Analyze multiple documents in batch using the specified model.
+        
+        Args:
+            model_id: The model ID to use for all documents
+            document_paths: List of paths to document files to analyze
+            **kwargs: Additional parameters to pass to the analyze_document method
+            
+        Returns:
+            List of dictionaries containing analysis results for each document
+        """
+        results = []
+        for path in document_paths:
+            try:
+                result = self.analyze_custom_document(custom_model_id, path, **kwargs)
+                results.append({"document_path": path, "status": "success", "result": result})
+            except Exception as e:
+                results.append({"document_path": path, "status": "error", "error": str(e)})
+        return results
+    
+    def analyze_batch_custom_documents_from_urls(self, custom_model_id: str, document_urls: List[str], **kwargs) -> List[Dict[str, Any]]:
+        """Analyze multiple documents from URLs in batch using the specified model.
+        
+        Args:
+            model_id: The model ID to use for all documents
+            document_urls: List of URLs of documents to analyze
+            **kwargs: Additional parameters to pass to the analyze_document method
+            
+        Returns:
+            List of dictionaries containing analysis results for each document
+        """
+        results = []
+        for url in document_urls:
+            try:
+                result = self.analyze_custom_document_from_url(custom_model_id, url, **kwargs)
+                results.append({"document_url": url, "status": "success", "result": result})
+            except Exception as e:
+                results.append({"document_url": url, "status": "error", "error": str(e)})
+        return results    
     
     def _serialize_result(self, result) -> Dict[str, Any]:
         """Convert the document analysis result to a serializable dictionary.
@@ -2106,6 +2576,126 @@ class DocumentIntelligenceClientWrapper:
                     })
         
         return serialized
+
+class DocumentIntelligenceModels:
+
+    document_intelligence_service: DocumentIntelligenceService
+    client: DocumentIntelligenceAdministrationClient
+    
+    def __init__(self, document_intelligence_service: DocumentIntelligenceService, client: DocumentIntelligenceAdministrationClient):
+        self.document_intelligence_service = document_intelligence_service
+        self.client = client
+
+    def get_document_models(self) -> list:
+        """
+        List all custom document model IDs in the Azure Document Intelligence resource.
+
+        Returns:
+            list: A list of custom model IDs.
+        """
+        # Find the custom model ids
+        custom_model_ids = [custom_model.model_id for custom_model in self.client.list_models()]
+        return custom_model_ids
+
+
+    def get_document_model_details(self, model_id) -> dict:
+        """
+        Retrieve details of a specific document model by its ID.
+
+        Args:
+            model_id (str): The unique identifier of the document model.
+
+        Returns:
+            dict: A dictionary containing details about the specified model.
+        """
+        # Get the model details
+        model_details = self.client.get_model(model_id=model_id)
+        return model_details.as_dict()
+
+
+    def delete_model(self, model_id) -> str:
+        """
+        Delete a custom document model from the Azure Form Recognizer resource.
+
+        Args:
+            model_id (str): The ID of the model to delete.
+
+        Returns:
+            str: Confirmation message after deletion.
+        """
+        # Delete an extraction document model based on model_id
+        self.client.delete_model(model_id=model_id)
+        return f"Succesfully deleted the custom model {model_id}."
+
+
+    def create_document_model(self, model_id: str, build_mode: str, blob_container_url: str, folder_path: str = None, description: str = None) -> dict:
+        """
+        Create and train a new custom document model using labeled or unlabeled training data.
+
+        Args:
+            model_id (str): Unique ID to assign to the custom model.
+            build_mode (str): Training mode, such as 'template' or 'neural'.
+            blob_container_url (str): URL to the Azure Blob Storage container containing the training data (pdf, pdf.labels.json, pdf.ocr.json per document).
+            folder_path (str, optional): Subfolder path in the container with the training data. Defaults to None.
+            description (str, optional): Optional description for the model. Defaults to None.
+
+        Returns:
+            dict: Dictionary containing details about the newly created model.
+        """
+        # Verify folder path format
+        if folder_path and not folder_path.startswith('/'):
+            folder_path = "/" + folder_path
+        # Create and train a custom model 
+        poller = self.client.begin_build_document_model(
+            body = BuildDocumentModelRequest(model_id=model_id, 
+                                        build_mode=build_mode, 
+                                        description=description,
+                                        azure_blob_source=AzureBlobContentSource(
+                                            container_url=blob_container_url,
+                                            prefix=folder_path)
+                                            )
+            )
+        return poller.result().as_dict()
+    
+    
+    def copy_document_model(self, model_id: str, target_endpoint: str, target_key: str) -> dict:
+        """
+        Copy a document model from the current Azure Document Intelligence resource to a target resource.
+        
+        Args:
+            model_id (str): The ID of the model to be copied.
+            target_endpoint (str): The endpoint URL of the target Azure Form Recognizer resource.
+            target_key (str): The API key for the target resource to authenticate the copy operation.
+
+        Returns:
+            dict: A dictionary containing the details of the newly created model in the target resource.
+        """
+        print(f"Initial model: {model_id}")
+        # Initialize default model description to be copied
+        model_description = f"The model {model_id} has been copied from the resource {self.document_intelligence_service.get_name()}."
+        # Get description for model to copy to target source
+        model_details = self.get_document_model_details(model_id)
+        if "description" in model_details.keys():
+            model_description = model_details["description"]
+            print(f"Retrieve model description: {model_description}")
+        # Create the documemt admin for target subscription
+        target_client = DocumentIntelligenceAdministrationClient(
+            endpoint=target_endpoint, credential=AzureKeyCredential(target_key)
+        )
+        # Get authorization to copy model to target client
+        target = target_client.authorize_model_copy(
+            body= AuthorizeCopyRequest(
+            model_id= model_id,
+            description= model_description)
+        )
+        print(f"Succesfully created the authentication!")
+        # Perform the copy of the file
+        poller = self.client.begin_copy_model_to(
+            model_id=model_id,
+            body=target,
+        )
+        print(f"Succesfully copied the model {model_id}")
+        return poller.result().as_dict()
 
 
 class OpenAIClient:
@@ -4963,3 +5553,134 @@ class OCRTextExtractor:
         return response['content']
         
 
+import pandas as pd
+from azure.data.tables import TableServiceClient, TableClient
+from azure.core.exceptions import ResourceExistsError
+
+class Table:
+    storage_account: StorageAccount
+
+    def __init__(self, storage_account: StorageAccount):
+        self.storage_account = storage_account
+        self.connection_string = storage_account.connection_string_description
+        self.table_service_client = TableServiceClient.from_connection_string(conn_str=self.connection_string)
+
+
+    def get_sa_tables(self) -> list:
+        """
+        Retrieve the list of table names in the associated storage account.
+
+        Returns:
+            list: A list of table names.
+        """
+        tables = [table.name for table in self.table_service_client.list_tables()]
+        return tables
+
+    def create_sa_table(self, table_name: str) -> TableClient:
+        """
+        Create a new table in the storage account if it does not already exist.
+
+        Args:
+            table_name (str): The name of the table to create.
+
+        Returns:
+            TableClient: A client to interact with the created or existing table.
+        """
+        # Create table in the storage account if not exists
+        table_client = self.table_service_client.create_table_if_not_exists(table_name)
+        # Return the tableItemId
+        return table_client
+
+    def delete_sa_table(self, table_name: str) -> str:
+        """
+        Delete a specified table from the storage account.
+
+        Args:
+            table_name (str): The name of the table to delete.
+
+        Returns:
+            str: Confirmation message after deletion.
+        """
+        # Delete a provided table
+        self.table_service_client.delete_table(table_name)
+        return f"The table {table_name} successfully deleted."
+
+    def upload_entities_from_csv(self, csv_path: str, table_name: str, table_schema: list[str], delimeter: str = '|') -> str:
+        """
+        Upload entities from a CSV file into the specified Azure Table.
+
+        Args:
+            csv_path (str): Path to the CSV file.
+            table_name (str): Name of the table to upload entities to.
+            table_schema (list[str]): Schema (list of column names) for the table.
+            delimeter (str, optional): Delimiter used in the CSV file. Defaults to '|'.
+
+        Returns:
+            str: A log message indicating the result of the upload operation.
+        """
+        # Get the table to populate with file entities
+        table_client = self.table_service_client.get_table_client(table_name)
+        # Reading the csv or txt to a pandas dataframe
+        raw_files_df = pd.read_csv(csv_path, sep=delimeter, encoding='utf-8', names=table_schema, header=None)
+        # Convert this to a list of entries
+        entities = raw_files_df.to_dict(orient='records')
+        skipped_files = 0
+        # Uploading all entries of the csv in table
+        for i, entity in enumerate(entities):
+            try:
+                table_client.create_entity(entity=entity)
+            except ResourceExistsError:
+                # Entity already exists, replace it
+                table_client.upsert_entity(entity=entity, mode='replace')
+                skipped_files += 1
+
+        if skipped_files > 0:
+            response = f"Successfully uploaded {i+1 - skipped_files} entities and {skipped_files} replaced because they already exist in {table_name} table from the {csv_path}"
+        else:
+            response = f"Successfully uploaded {i+1} entities in {table_name} table from the {csv_path}"
+        # Returning a log message
+        return response
+
+    def delete_entities_from_csv(self, csv_path: str, table_name: str, table_schema: list[str], delimeter: str = '|') -> str:
+        """
+        Delete entities from a table using keys provided in a CSV file.
+
+        Args:
+            csv_path (str): Path to the CSV file.
+            table_name (str): Name of the table from which entities are to be deleted.
+            table_schema (list[str]): Schema of the table (list of column names) to match CSV.
+            delimeter (str, optional): Delimiter used in the CSV file. Defaults to '|'.
+
+        Returns:
+            str: A log message indicating how many entities were deleted.
+        """
+        # Get the table to populate with file entities
+        table_client = self.table_service_client.get_table_client(table_name)
+        # Reading the csv or txt to a pandas dataframe
+        raw_files_df = pd.read_csv(csv_path, sep=delimeter, encoding='utf-8', names=table_schema, header=None)
+        # Convert this to a list of entries
+        entities = raw_files_df.to_dict(orient='records')
+        # Uploading all entries of the csv in table
+        for i, entity in enumerate(entities):
+            table_client.delete_entity(partition_key=entity['PartitionKey'], row_key=entity['RowKey'])
+        # Returning a log message
+        return f"Successfully deleted {i+1} entities in {table_name} from the {csv_path}"
+
+    def get_entities(self, table_name: str) -> pd.DataFrame:
+        """
+        Retrieve all entities from the specified Azure Table.
+
+        Args:
+            table_name (str): The name of the table to retrieve entities from.
+
+        Returns:
+            pd.DataFrame: A DataFrame containing all entities in the table.
+        """
+        # Get the table to retieved table entities
+        table_client = self.table_service_client.get_table_client(table_name)
+        # Get all entities in the table
+        entities = list(table_client.list_entities())
+        # Create a dataframe with the results
+        entities_df = pd.DataFrame(entities)
+        # Return the resulted dataframe
+        return entities_df

@@ -1,6 +1,8 @@
 azure-ai-projects>=1.0.0b7
 azure-ai-resources>=1.0.0b9
 azure-ai-formrecognizer>=3.3.0
+azure-ai-documentintelligence==1.0.2
+azure-data-tables==12.7.0
 azure-identity>=1.21.0
 azure-mgmt-cognitiveservices>=13.6.0
 azure-mgmt-resource>=22.0.0

@@ -11,6 +11,8 @@ Description-Content-Type: text/markdown
 Requires-Dist: azure-ai-projects>=1.0.0b7
 Requires-Dist: azure-ai-resources>=1.0.0b9
 Requires-Dist: azure-ai-formrecognizer>=3.3.0
+Requires-Dist: azure-ai-documentintelligence==1.0.2
+Requires-Dist: azure-data-tables==12.7.0
 Requires-Dist: azure-identity>=1.21.0
 Requires-Dist: azure-mgmt-cognitiveservices>=13.6.0
 Requires-Dist: azure-mgmt-resource>=22.0.0

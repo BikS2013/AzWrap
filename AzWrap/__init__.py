@@ -16,7 +16,7 @@ from .wrapper import (
     # Storage
     StorageAccount,
     Container,
-
+    Table,
     BlobType,
     
     # Search
@@ -34,7 +34,10 @@ from .wrapper import (
     
     # Document Intelligence
     DocumentIntelligenceService,
-    DocumentIntelligenceClientWrapper
+    DocumentIntelligenceClientWrapper,
+    DocumentIntelligenceModels,
+    DocumentAnalysisClientWrapper,
+    FormRecognizerModels
 )
 
 # CLI functionality
@@ -51,7 +54,7 @@ __all__ = [
     # Storage
     "StorageAccount",
     "Container",
-
+    "Table",
     "BlobType",
     
     # Search Services
@@ -70,6 +73,9 @@ __all__ = [
     # Document Intelligence
     "DocumentIntelligenceService",
     "DocumentIntelligenceClientWrapper",
+    "DocumentIntelligenceModels",
+    "DocumentAnalysisClientWrapper",
+    "FormRecognizerModels",
     
     # CLI
     "cli_main"

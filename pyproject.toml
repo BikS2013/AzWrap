@@ -27,6 +27,7 @@ dependencies = [
     "azure-mgmt-storage>=22.1.1",
     "azure-search-documents>=11.5.2",
     "azure-storage-blob>=12.13.0",  # Required for blob storage operations
+    "azure-data-tables==12.7.0",  # Required for table storage operations
     "azure-core>=1.24.0",  # Required for credentials
     "langchain>=0.3.20",
     "langchain-community>=0.3.19",

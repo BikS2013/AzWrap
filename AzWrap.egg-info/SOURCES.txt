@@ -26,4 +26,6 @@ azwrap.egg-info/requires.txt
 azwrap.egg-info/top_level.txt
 test/test.py
 test/test_document_intelligence.py
+test/test_document_intelligence_models.py
+test/test_storage_tables.py
 test/test_identity.py
